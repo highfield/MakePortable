@@ -39,6 +39,7 @@ namespace MakePortable
                 links,
                 new DirectoryInfo(_sourceFolderPath),
                 new DirectoryInfo(_targetFolderPath),
+                string.Empty,
                 new string[] { "properties", "bin", "obj" },
                 new string[] { ".cs" }
                 );
@@ -173,6 +174,7 @@ namespace MakePortable
             List<LinkItem> links,
             DirectoryInfo sourceDirectory,
             DirectoryInfo targetDirectory,
+            string linkPath,
             IEnumerable<string> foldersToIgnore,
             IEnumerable<string> extensionsToInclude
             )
@@ -191,7 +193,7 @@ namespace MakePortable
                     }
 
                     //reproduce the same folders structure by the target side
-                    var child = new DirectoryInfo(Path.Combine(sourceDirectory.FullName, di.Name));
+                    var child = new DirectoryInfo(Path.Combine(targetDirectory.FullName, di.Name));
                     if (child.Exists == false)
                     {
                         child.Create();
@@ -202,6 +204,7 @@ namespace MakePortable
                         links,
                         di,
                         child,
+                        Path.Combine(linkPath, di.Name),
                         Enumerable.Empty<string>(),
                         extensionsToInclude
                         );
@@ -217,8 +220,10 @@ namespace MakePortable
 
                     //collect some info about the current file
                     var lnk = new LinkItem();
-                    lnk.Include = MakeRelativePath(_targetFolderPath, fi.FullName);
-                    lnk.Link = Path.GetFileName(fi.FullName);
+                    lnk.Include = MakeRelativePath(_targetFolderPath + "/", fi.FullName);
+                    lnk.Link = string.IsNullOrEmpty(linkPath) 
+                        ? Path.GetFileName(fi.FullName)
+                        : Path.Combine(linkPath, Path.GetFileName(fi.FullName));
                     links.Add(lnk);
                 }
                 else
