@@ -11,47 +11,128 @@ namespace MakePortable
 {
     class Program
     {
+        static readonly Dictionary<string, TemplateInfo> _templates = new Dictionary<string, TemplateInfo>()
+        {
+            ["PCL"] = new TemplateInfo { Key = "PCL", FolderSuffix = "PORTABLE", FileName = "PCL", Description = "PCL (portable)" },
+            ["NET45"] = new TemplateInfo { Key = "NET45", FolderSuffix = "NET45", FileName = "NET45", Description = ".Net 4.5" },
+            ["NET46"] = new TemplateInfo { Key = "NET46", FolderSuffix = "NET46", FileName = "NET46", Description = ".Net 4.6" },
+        };
+
         static string _currentPath;
         static string _sourceName;
         static string _sourceFolderPath;
         static string _targetName;
         static string _targetFolderPath;
         static string _targetProjectFileName;
+        static TemplateInfo _selectedTemplate;
 
-        static XNamespace _xns = XNamespace.Get("http://schemas.microsoft.com/developer/msbuild/2003");
+        static readonly XNamespace _xns = XNamespace.Get("http://schemas.microsoft.com/developer/msbuild/2003");
 
 
         static void Main(string[] args)
         {
-            if (args.Length != 1)
+            _currentPath = Environment.CurrentDirectory;
+
+            if (ParseInputArgs(args))
             {
-                throw new ArgumentException("Please, specify where the source .Net Core project is.");
+                ValidateSource();
+                EnsureTargetProject();
+
+                var links = new List<LinkItem>();
+                AlignTree(
+                    links,
+                    new DirectoryInfo(_sourceFolderPath),
+                    new DirectoryInfo(_targetFolderPath),
+                    string.Empty,
+                    new string[] { "properties", "bin", "obj" },
+                    new string[] { ".cs" }
+                    );
+
+                PatchTargetProject(
+                    links
+                    );
+
+                Console.WriteLine("Successfully aligned the target project!");
             }
 
-            _currentPath = Environment.CurrentDirectory;
-            _sourceFolderPath = Path.Combine(_currentPath, args[0]);
-
-            ValidateSource();
-            EnsureTargetProject();
-
-            var links = new List<LinkItem>();
-            AlignTree(
-                links,
-                new DirectoryInfo(_sourceFolderPath),
-                new DirectoryInfo(_targetFolderPath),
-                string.Empty,
-                new string[] { "properties", "bin", "obj" },
-                new string[] { ".cs" }
-                );
-
-            PatchTargetProject(
-                links
-                );
-
-            Console.WriteLine("Successfully aligned the target project!");
-
+            Console.WriteLine();
             Console.Write("Press any key to exit...");
             Console.ReadKey();
+        }
+
+
+        /// <summary>
+        /// Validate and parse the application's input parameters
+        /// </summary>
+        /// <param name="args"></param>
+        /// <returns></returns>
+        static bool ParseInputArgs(IEnumerable<string> args)
+        {
+            string failureReason = null;
+
+            if (args.Any())
+            {
+                foreach (string a in args)
+                {
+                    if (a.StartsWith("--"))
+                    {
+                        string au = a.Substring(2).ToUpperInvariant();
+                        TemplateInfo ti;
+                        if (_templates.TryGetValue(au, out ti))
+                        {
+                            if (_selectedTemplate == null)
+                            {
+                                _selectedTemplate = ti;
+                            }
+                            else
+                            {
+                                failureReason = "Ambiguous profile switch: " + a;
+                            }
+                        }
+                        else
+                        {
+                            failureReason = "Unsupported option: " + a;
+                        }
+                    }
+                    else if (string.IsNullOrEmpty(_sourceFolderPath))
+                    {
+                        _sourceFolderPath = Path.Combine(_currentPath, a);
+                    }
+                    else
+                    {
+                        failureReason = "Bad input.";
+                    }
+
+                    if (string.IsNullOrEmpty(failureReason) == false) break;
+                }
+            }
+            else
+            {
+                failureReason = "Missing arguments.";
+            }
+
+            if (string.IsNullOrEmpty(failureReason))
+            {
+                //success
+                _selectedTemplate = _selectedTemplate ?? _templates.Values.First();
+                return true;
+            }
+            else
+            {
+                //failure
+                Console.WriteLine("*** ERROR!");
+                Console.WriteLine(failureReason);
+                Console.WriteLine();
+                Console.WriteLine("Usage:");
+                Console.WriteLine("  MakePortable [switches] project-path");
+                Console.WriteLine();
+                Console.WriteLine("Supported switches:");
+                foreach (TemplateInfo ti in _templates.Values)
+                {
+                    Console.WriteLine($"  --{ti.Key,-8}    creates a {ti.Description} project");
+                }
+                return false;
+            }
         }
 
 
@@ -84,7 +165,7 @@ namespace MakePortable
             }
 
             //define the target naming and location
-            _targetName = _sourceName + "_PORTABLE";
+            _targetName = _sourceName + "_" + _selectedTemplate.FolderSuffix;
             _targetFolderPath = Path.Combine(_currentPath, _targetName);
             _targetProjectFileName = Path.Combine(_targetFolderPath, _targetName + ".csproj");
         }
@@ -109,7 +190,10 @@ namespace MakePortable
             {
                 //take the portable project's content template
                 XDocument xdoc;
-                var stream = Assembly.GetExecutingAssembly().GetManifestResourceStream("MakePortable.ProjectTemplate.xml");
+                var stream = Assembly.GetExecutingAssembly().GetManifestResourceStream(
+                    $"MakePortable.Templates.{_selectedTemplate.FileName}ProjectTemplate.xml"
+                    );
+
                 using (var reader = new StreamReader(stream))
                 {
                     xdoc = XDocument.Load(reader);
@@ -141,7 +225,7 @@ namespace MakePortable
             {
                 //take the template
                 string sdoc;
-                var stream = Assembly.GetExecutingAssembly().GetManifestResourceStream("MakePortable.AssemblyInfoTemplate.txt");
+                var stream = Assembly.GetExecutingAssembly().GetManifestResourceStream("MakePortable.Templates.AssemblyInfoTemplate.txt");
                 using (var reader = new StreamReader(stream))
                 {
                     sdoc = reader.ReadToEnd();
@@ -221,14 +305,14 @@ namespace MakePortable
                     //collect some info about the current file
                     var lnk = new LinkItem();
                     lnk.Include = MakeRelativePath(_targetFolderPath + "/", fi.FullName);
-                    lnk.Link = string.IsNullOrEmpty(linkPath) 
+                    lnk.Link = string.IsNullOrEmpty(linkPath)
                         ? Path.GetFileName(fi.FullName)
                         : Path.Combine(linkPath, Path.GetFileName(fi.FullName));
                     links.Add(lnk);
                 }
                 else
                 {
-                    throw new NotSupportedException("Item not supported: " + fsi);
+                    throw new NotSupportedException("FileSysItem not supported: " + fsi);
                 }
             }
         }
@@ -246,10 +330,19 @@ namespace MakePortable
             var xdoc = XDocument.Load(_targetProjectFileName);
 
             //find the proper element
-            var xitemGroup = xdoc.Root
+            XElement xitemGroup;
+            xitemGroup = xdoc.Root
                 .Elements(_xns + "ItemGroup")
-                .Skip(1)
-                .First();
+                .Where(_ => _.Elements(_xns + "Compile").Any())
+                .FirstOrDefault();
+
+            if (xitemGroup == null)
+            {
+                xitemGroup = xdoc.Root
+                    .Elements(_xns + "ItemGroup")
+                    .Where(_ => _.Elements().Any() == false)
+                    .FirstOrDefault();
+            }
 
             //clean up any child
             xitemGroup.RemoveAll();
@@ -320,6 +413,18 @@ namespace MakePortable
         {
             public string Include;
             public string Link;
+        }
+
+
+        /// <summary>
+        /// Template descriptor
+        /// </summary>
+        private class TemplateInfo
+        {
+            public string Key;
+            public string FolderSuffix;
+            public string FileName;
+            public string Description;
         }
     }
 }
